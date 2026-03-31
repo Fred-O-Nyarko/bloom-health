@@ -1,5 +1,5 @@
 """
-Twilio service — initiates outbound calls.
+Twilio service — initiates outbound calls and configures inbound webhooks.
 """
 
 import logging
@@ -34,3 +34,34 @@ def initiate_call(to: str) -> dict:
     )
     logger.info(f"Initiated call SID={call.sid} to={to}")
     return {"call_sid": call.sid, "status": call.status, "to": to}
+
+
+def configure_inbound_webhook(answer_url: str) -> dict:
+    """
+    Auto-configure the Twilio phone number so that inbound calls are routed
+    to our /twiml/answer endpoint.
+
+    This is idempotent — safe to call on every startup.
+    Returns a dict with the phone number SID and the URL that was set.
+    """
+    client = get_twilio_client()
+
+    # Find the phone number resource matching our configured FROM number
+    numbers = client.incoming_phone_numbers.list(
+        phone_number=settings.twilio_from_number, limit=1
+    )
+    if not numbers:
+        raise RuntimeError(
+            f"No Twilio phone number found matching {settings.twilio_from_number}. "
+            "Check your TWILIO_FROM_NUMBER in .env."
+        )
+
+    number = numbers[0]
+    number.update(
+        voice_url=answer_url,
+        voice_method="POST",
+    )
+    logger.info(
+        f"Twilio inbound webhook configured: {settings.twilio_from_number} → {answer_url}"
+    )
+    return {"phone_number_sid": number.sid, "voice_url": answer_url}

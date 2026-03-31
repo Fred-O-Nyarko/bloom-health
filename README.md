@@ -29,7 +29,7 @@ FastAPI bridges audio in real time:
                                                    STT → LLM (Claude) → TTS
 ```
 
-**The AI agent, Abena**, asks about physical recovery, emotional wellbeing, infant feeding, and postpartum mental health — providing warm, evidence-based guidance and escalating to professional care when needed.
+**The AI agent, Bloom**, asks about physical recovery, emotional wellbeing, infant feeding, and postpartum mental health — providing warm, evidence-based guidance and escalating to professional care when needed.
 
 ---
 
@@ -112,7 +112,7 @@ Response:
   "call_sid": "CA...",
   "status": "queued",
   "to": "+14155552671",
-  "message": "📞 Call initiated to +14155552671. Abena will speak when the call is answered."
+  "message": "📞 Call initiated to +14155552671. Bloom will speak when the call is answered."
 }
 ```
 
@@ -124,7 +124,7 @@ Visit **http://localhost:8000/docs** for the interactive Swagger UI.
 
 ## Conversation Flow
 
-Abena, the AI agent, will:
+Bloom, the AI agent, will:
 
 1. **Greet** the mother warmly and ask how she's feeling overall
 2. **Physical check** — bleeding, pain, wound healing, sleep, appetite
@@ -137,8 +137,8 @@ Abena, the AI agent, will:
 
 If the mother describes:
 
-- Heavy bleeding, fever, severe pain → Abena advises **immediate medical attention**
-- Thoughts of self-harm → Abena firmly redirects to **emergency services**
+- Heavy bleeding, fever, severe pain → Bloom advises **immediate medical attention**
+- Thoughts of self-harm → Bloom firmly redirects to **emergency services**
 
 ---
 

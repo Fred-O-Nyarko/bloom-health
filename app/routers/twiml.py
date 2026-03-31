@@ -89,19 +89,31 @@ def mulaw8k_to_pcm16k(mulaw_bytes: bytes, resample_state=None):
 
 
 @router.post("/answer")
-async def twiml_answer(request: Request, CallSid: str = Form(default="")):
+async def twiml_answer(
+    request: Request,
+    CallSid: str = Form(default=""),
+    From: str = Form(default=""),
+    Direction: str = Form(default=""),
+):
     """
-    Twilio calls this endpoint when the recipient answers the call.
-    We return TwiML that starts a bidirectional Media Stream WebSocket,
-    embedding patient_name as a custom parameter so the WebSocket bridge
-    can read it and pass it to ElevenLabs as a dynamic variable.
+    Twilio calls this endpoint when a call is answered — both inbound and outbound.
+
+    - Outbound: patient_name/days_since_delivery are pre-stored in call_metadata by /call/outbound.
+    - Inbound:  call_metadata will have no entry for this CallSid, so we use graceful defaults.
+      The caller's number (From) is logged so you can identify who called in.
     """
     ws_url = settings.twiml_websocket_url
 
-    # Look up the call variables stored when the call was initiated
+    # Look up the call variables stored when the call was initiated (outbound only)
     meta = call_metadata.pop(CallSid, {})
     patient_name = meta.get("patient_name", "there")
     days_since_delivery = meta.get("days_since_delivery", "0")
+
+    call_type = "inbound" if Direction == "inbound" else "outbound"
+    logger.info(
+        f"[{call_type.upper()}] callSid={CallSid} from={From!r} "
+        f"patient_name={patient_name!r} days={days_since_delivery}"
+    )
 
     twiml = f"""<?xml version="1.0" encoding="UTF-8"?>
 <Response>
@@ -109,10 +121,10 @@ async def twiml_answer(request: Request, CallSid: str = Form(default="")):
     <Stream url="{ws_url}">
       <Parameter name="patient_name" value="{patient_name}"/>
       <Parameter name="days_since_delivery" value="{days_since_delivery}"/>
+      <Parameter name="caller_number" value="{From}"/>
     </Stream>
   </Connect>
 </Response>"""
-    logger.info(f"Returning TwiML for callSid={CallSid} patient_name={patient_name!r} days={days_since_delivery}")
     return Response(content=twiml, media_type="application/xml")
 
 
@@ -259,7 +271,7 @@ async def media_stream_bridge(twilio_ws: WebSocket):
                                 msg.get("agent_response_event", {}).get("agent_response", "")
                             )
                             if response_text:
-                                logger.info(f"[Abena]: {response_text}")
+                                logger.info(f"[Bloom]: {response_text}")
 
                         elif msg_type == "user_transcript":
                             transcript = (

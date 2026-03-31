@@ -51,7 +51,7 @@ async def get_or_create_agent() -> str:
 async def _create_agent() -> str:
     """Create a new ElevenLabs Conversational AI agent via the API."""
     payload = {
-        "name": "Postpartum Care Advisor — Abena",
+        "name": "Postpartum Care Advisor — Bloom",
         "conversation_config": {
             "agent": {
                 "prompt": {

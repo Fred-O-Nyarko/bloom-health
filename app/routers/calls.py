@@ -5,8 +5,9 @@ POST /call/outbound — trigger an AI postpartum care call to a phone number.
 from fastapi import APIRouter
 from pydantic import BaseModel, field_validator
 
-from app.services.twilio_service import initiate_call
+from app.services.twilio_service import initiate_call, configure_inbound_webhook
 from app.state import call_metadata
+from app.config import settings
 
 router = APIRouter(prefix="/call", tags=["calls"])
 
@@ -58,7 +59,28 @@ async def outbound_call(body: CallRequest):
         **result,
         message=(
             f"📞 Call initiated to {body.to}. "
-            "Abena (postpartum AI agent) will speak when the call is answered."
+            "Bloom (postpartum AI agent) will speak when the call is answered."
         ),
     )
 
+
+@router.post("/configure-inbound", tags=["calls"])
+async def configure_inbound():
+    """
+    Re-point the Twilio phone number's inbound webhook at the current server URL.
+
+    Call this after restarting ngrok (which gives you a new public URL) to ensure
+    Twilio still routes inbound calls correctly — no need to visit the Twilio console.
+    """
+    import asyncio
+    loop = asyncio.get_event_loop()
+    result = await loop.run_in_executor(
+        None, configure_inbound_webhook, settings.twiml_answer_url
+    )
+    return {
+        "status": "configured",
+        "phone_number": settings.twilio_from_number,
+        "voice_url": result["voice_url"],
+        "phone_number_sid": result["phone_number_sid"],
+        "message": f"📞 Call {settings.twilio_from_number} to speak with the AI agent.",
+    }

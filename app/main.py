@@ -11,6 +11,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from app.config import settings
 from app.routers import calls, twiml
 from app.services.elevenlabs_service import get_or_create_agent
+from app.services.twilio_service import configure_inbound_webhook
 
 # Configure logging
 logging.basicConfig(
@@ -34,7 +35,19 @@ async def lifespan(app: FastAPI):
     # Ensure agent exists (creates it if missing)
     agent_id = await get_or_create_agent()
     logger.info(f"   ElevenLabs agent: {agent_id}")
-    logger.info("✅ Ready — trigger a call via POST /call/outbound")
+
+    # Auto-configure the Twilio phone number to route inbound calls to us
+    try:
+        import asyncio
+        loop = asyncio.get_event_loop()
+        webhook_info = await loop.run_in_executor(
+            None, configure_inbound_webhook, settings.twiml_answer_url
+        )
+        logger.info(f"   Inbound webhook set: {settings.twilio_from_number} → {settings.twiml_answer_url}")
+    except Exception as exc:
+        logger.warning(f"   ⚠️  Could not auto-configure inbound webhook: {exc}")
+
+    logger.info("✅ Ready — call %s to speak with the agent, or POST /call/outbound to initiate a call", settings.twilio_from_number)
 
     yield
 
