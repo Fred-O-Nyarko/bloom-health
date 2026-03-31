@@ -61,13 +61,28 @@ def pcm16k_to_mulaw8k(pcm_bytes: bytes, resample_state=None):
     Returns (mulaw_bytes, new_resample_state).
     """
     if not _HAS_AUDIOOP:
-        return pcm_bytes, None  # pass-through (will sound wrong, but won't crash)
+        return pcm_bytes, None
 
     # Downsample 16kHz → 8kHz
     pcm_8k, new_state = audioop.ratecv(pcm_bytes, 2, 1, 16000, 8000, resample_state)
     # Linear PCM → G.711 mulaw
     mulaw = audioop.lin2ulaw(pcm_8k, 2)
     return mulaw, new_state
+
+
+def mulaw8k_to_pcm16k(mulaw_bytes: bytes, resample_state=None):
+    """
+    Convert Twilio mulaw 8kHz (phone audio) → PCM 16-bit 16kHz (ElevenLabs input).
+    Returns (pcm_bytes, new_resample_state).
+    """
+    if not _HAS_AUDIOOP:
+        return mulaw_bytes, None
+
+    # G.711 mulaw → linear PCM at 8kHz
+    pcm_8k = audioop.ulaw2lin(mulaw_bytes, 2)
+    # Upsample 8kHz → 16kHz
+    pcm_16k, new_state = audioop.ratecv(pcm_8k, 2, 1, 8000, 16000, resample_state)
+    return pcm_16k, new_state
 
 
 # ── TwiML webhook ─────────────────────────────────────────────────────────────
@@ -120,7 +135,8 @@ async def media_stream_bridge(twilio_ws: WebSocket):
     call_sid: str | None = None
     patient_name: str = "there"
     days_since_delivery: str = "0"
-    resample_state = None  # stateful resampler for audio continuity
+    resample_state = None     # ElevenLabs PCM 16kHz → Twilio mulaw 8kHz
+    upsample_state = None     # Twilio mulaw 8kHz → ElevenLabs PCM 16kHz
 
     try:
         # ── Connect directly to ElevenLabs WebSocket with API key header ─────
@@ -170,14 +186,16 @@ async def media_stream_bridge(twilio_ws: WebSocket):
             await el_ws.send(json.dumps(init_msg))
             logger.info(f"Sent ElevenLabs init with patient_name={patient_name!r} days={days_since_delivery}")
 
-            # Flush any buffered media frames
+            # Flush any early audio frames buffered before the start event
             for buffered in twilio_buffer:
                 if buffered.get("event") == "media":
-                    await el_ws.send(json.dumps({"user_audio_chunk": buffered["media"]["payload"]}))
+                    mulaw_bytes = base64.b64decode(buffered["media"]["payload"])
+                    pcm_bytes, upsample_state = mulaw8k_to_pcm16k(mulaw_bytes, upsample_state)
+                    await el_ws.send(json.dumps({"user_audio_chunk": base64.b64encode(pcm_bytes).decode()}))
 
             # ── Task 1: Twilio → ElevenLabs ───────────────────────────────────
             async def forward_twilio_to_elevenlabs():
-                nonlocal stream_sid, call_sid, patient_name, days_since_delivery
+                nonlocal stream_sid, call_sid, patient_name, days_since_delivery, upsample_state
                 try:
                     while True:
                         raw = await twilio_ws.receive_text()
@@ -185,12 +203,11 @@ async def media_stream_bridge(twilio_ws: WebSocket):
                         event = msg.get("event")
 
                         if event == "media":
-                            # Twilio sends mulaw 8kHz base64 — forward directly to ElevenLabs
-                            # (agent is configured with ASR input format ulaw_8000)
-                            audio_b64 = msg["media"]["payload"]
-                            await el_ws.send(
-                                json.dumps({"user_audio_chunk": audio_b64})
-                            )
+                            # Convert Twilio mulaw 8kHz → PCM 16kHz for ElevenLabs
+                            mulaw_bytes = base64.b64decode(msg["media"]["payload"])
+                            pcm_bytes, upsample_state = mulaw8k_to_pcm16k(mulaw_bytes, upsample_state)
+                            pcm_b64 = base64.b64encode(pcm_bytes).decode()
+                            await el_ws.send(json.dumps({"user_audio_chunk": pcm_b64}))
 
                         elif event == "stop":
                             logger.info(f"Stream stopped: callSid={call_sid}")
