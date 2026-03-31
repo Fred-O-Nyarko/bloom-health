@@ -6,12 +6,15 @@ from fastapi import APIRouter
 from pydantic import BaseModel, field_validator
 
 from app.services.twilio_service import initiate_call
+from app.state import call_metadata
 
 router = APIRouter(prefix="/call", tags=["calls"])
 
 
 class CallRequest(BaseModel):
     to: str  # E.164 format, e.g. "+14155552671"
+    patient_name: str = "there"  # Used in ElevenLabs first message dynamic variable
+    days_since_delivery: int = 0  # Days since the mother gave birth
 
     @field_validator("to")
     @classmethod
@@ -44,10 +47,18 @@ async def outbound_call(body: CallRequest):
     - Server accessible via a public URL (ngrok, Cloudflare Tunnel, etc.)
     """
     result = initiate_call(body.to)
+
+    # Store call variables so the TwiML webhook and WebSocket bridge can use them
+    call_metadata[result["call_sid"]] = {
+        "patient_name": body.patient_name,
+        "days_since_delivery": str(body.days_since_delivery),
+    }
+
     return CallResponse(
         **result,
         message=(
             f"📞 Call initiated to {body.to}. "
-            "Amara (postpartum AI agent) will speak when the call is answered."
+            "Abena (postpartum AI agent) will speak when the call is answered."
         ),
     )
+

@@ -51,7 +51,7 @@ async def get_or_create_agent() -> str:
 async def _create_agent() -> str:
     """Create a new ElevenLabs Conversational AI agent via the API."""
     payload = {
-        "name": "Postpartum Care Advisor — Amara",
+        "name": "Postpartum Care Advisor — Abena",
         "conversation_config": {
             "agent": {
                 "prompt": {
@@ -89,16 +89,20 @@ async def _create_agent() -> str:
         return data["agent_id"]
 
 
-async def get_signed_websocket_url(agent_id: str) -> str:
+def get_elevenlabs_ws_url(agent_id: str) -> str:
     """
-    Get a short-lived signed WebSocket URL for ElevenLabs Conversational AI.
-    This avoids exposing the API key in WebSocket headers.
+    Build the ElevenLabs Conversational AI WebSocket URL.
+
+    IMPORTANT: We build this as a raw f-string rather than using httpx params,
+    because the agent_id may contain a compound value like:
+        agent_xxx&branch_id=agtbrch_xxx
+    Using httpx params would URL-encode the '&' to '%26', breaking the request.
+    By embedding it directly in the URL string, the '&' is preserved as-is,
+    which ElevenLabs correctly interprets as a second query parameter.
     """
-    async with httpx.AsyncClient(timeout=10) as client:
-        response = await client.get(
-            f"{ELEVENLABS_BASE_URL}/convai/conversation/get_signed_url",
-            headers=_headers(),
-            params={"agent_id": agent_id},
-        )
-        response.raise_for_status()
-        return response.json()["signed_url"]
+    return f"wss://api.elevenlabs.io/v1/convai/conversation?agent_id={agent_id}"
+
+
+def get_elevenlabs_ws_headers() -> dict:
+    """Headers required for authenticated ElevenLabs WebSocket connections."""
+    return {"xi-api-key": settings.elevenlabs_api_key}

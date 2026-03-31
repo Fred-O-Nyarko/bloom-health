@@ -29,7 +29,7 @@ FastAPI bridges audio in real time:
                                                    STT → LLM (Claude) → TTS
 ```
 
-**The AI agent, Amara**, asks about physical recovery, emotional wellbeing, infant feeding, and postpartum mental health — providing warm, evidence-based guidance and escalating to professional care when needed.
+**The AI agent, Abena**, asks about physical recovery, emotional wellbeing, infant feeding, and postpartum mental health — providing warm, evidence-based guidance and escalating to professional care when needed.
 
 ---
 
@@ -53,15 +53,15 @@ cp .env.example .env
 
 Edit `.env` and fill in:
 
-| Variable | Where to find it |
-|---|---|
-| `TWILIO_ACCOUNT_SID` | [Twilio Console](https://console.twilio.com) → Account Info |
-| `TWILIO_AUTH_TOKEN` | Twilio Console → Account Info |
-| `TWILIO_FROM_NUMBER` | Your Twilio phone number (must have Voice enabled) |
-| `ELEVENLABS_API_KEY` | [ElevenLabs](https://elevenlabs.io) → Profile → API Keys |
-| `ELEVENLABS_VOICE_ID` | Optional — defaults to Rachel (warm, calm voice) |
-| `ELEVENLABS_AGENT_ID` | Leave **empty** on first run — auto-created! |
-| `PUBLIC_BASE_URL` | Your ngrok/tunnel URL (see step 3) |
+| Variable              | Where to find it                                            |
+| --------------------- | ----------------------------------------------------------- |
+| `TWILIO_ACCOUNT_SID`  | [Twilio Console](https://console.twilio.com) → Account Info |
+| `TWILIO_AUTH_TOKEN`   | Twilio Console → Account Info                               |
+| `TWILIO_FROM_NUMBER`  | Your Twilio phone number (must have Voice enabled)          |
+| `ELEVENLABS_API_KEY`  | [ElevenLabs](https://elevenlabs.io) → Profile → API Keys    |
+| `ELEVENLABS_VOICE_ID` | Optional — defaults to Rachel (warm, calm voice)            |
+| `ELEVENLABS_AGENT_ID` | Leave **empty** on first run — auto-created!                |
+| `PUBLIC_BASE_URL`     | Your ngrok/tunnel URL (see step 3)                          |
 
 ### 3. Expose Your Server (ngrok)
 
@@ -106,12 +106,13 @@ curl -X POST http://localhost:8000/call/outbound \
 ```
 
 Response:
+
 ```json
 {
   "call_sid": "CA...",
   "status": "queued",
   "to": "+14155552671",
-  "message": "📞 Call initiated to +14155552671. Amara will speak when the call is answered."
+  "message": "📞 Call initiated to +14155552671. Abena will speak when the call is answered."
 }
 ```
 
@@ -123,7 +124,7 @@ Visit **http://localhost:8000/docs** for the interactive Swagger UI.
 
 ## Conversation Flow
 
-Amara, the AI agent, will:
+Abena, the AI agent, will:
 
 1. **Greet** the mother warmly and ask how she's feeling overall
 2. **Physical check** — bleeding, pain, wound healing, sleep, appetite
@@ -135,8 +136,9 @@ Amara, the AI agent, will:
 ### Emergency Escalation
 
 If the mother describes:
-- Heavy bleeding, fever, severe pain → Amara advises **immediate medical attention**
-- Thoughts of self-harm → Amara firmly redirects to **emergency services**
+
+- Heavy bleeding, fever, severe pain → Abena advises **immediate medical attention**
+- Thoughts of self-harm → Abena firmly redirects to **emergency services**
 
 ---
 
@@ -168,11 +170,11 @@ hackathon/
 
 Browse [ElevenLabs Voice Library](https://elevenlabs.io/voice-library) and update `ELEVENLABS_VOICE_ID` in `.env`.
 
-| Voice | ID | Character |
-|---|---|---|
-| Rachel (default) | `21m00Tcm4TlvDq8ikWAM` | Warm, calm |
-| Domi | `AZnzlk1XvdvUeBnXmlld` | Strong, confident |
-| Bella | `EXAVITQu4vr4xnSDxMaL` | Soft, gentle |
+| Voice            | ID                     | Character         |
+| ---------------- | ---------------------- | ----------------- |
+| Rachel (default) | `21m00Tcm4TlvDq8ikWAM` | Warm, calm        |
+| Domi             | `AZnzlk1XvdvUeBnXmlld` | Strong, confident |
+| Bella            | `EXAVITQu4vr4xnSDxMaL` | Soft, gentle      |
 
 ### Modify the System Prompt
 
@@ -181,6 +183,7 @@ Edit `app/prompts/postpartum.py`. The agent is recreated each time `ELEVENLABS_A
 ### Use a Different LLM
 
 In `app/services/elevenlabs_service.py`, change the `"llm"` field in `_create_agent()`:
+
 - `"claude-3-5-sonnet"` (default, best quality)
 - `"claude-3-5-haiku"` (faster, lower cost)
 - `"gpt-4o"` (OpenAI alternative)

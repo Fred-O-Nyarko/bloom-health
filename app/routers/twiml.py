@@ -22,10 +22,15 @@ import json
 import logging
 
 import websockets
-from fastapi import APIRouter, Request, Response, WebSocket, WebSocketDisconnect
+from fastapi import APIRouter, Form, Request, Response, WebSocket, WebSocketDisconnect
 
 from app.config import settings
-from app.services.elevenlabs_service import get_or_create_agent, get_signed_websocket_url
+from app.state import call_metadata
+from app.services.elevenlabs_service import (
+    get_or_create_agent,
+    get_elevenlabs_ws_url,
+    get_elevenlabs_ws_headers,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -69,21 +74,30 @@ def pcm16k_to_mulaw8k(pcm_bytes: bytes, resample_state=None):
 
 
 @router.post("/answer")
-async def twiml_answer(request: Request):
+async def twiml_answer(request: Request, CallSid: str = Form(default="")):
     """
     Twilio calls this endpoint when the recipient answers the call.
-    We return TwiML that starts a bidirectional Media Stream WebSocket.
+    We return TwiML that starts a bidirectional Media Stream WebSocket,
+    embedding patient_name as a custom parameter so the WebSocket bridge
+    can read it and pass it to ElevenLabs as a dynamic variable.
     """
     ws_url = settings.twiml_websocket_url
+
+    # Look up the call variables stored when the call was initiated
+    meta = call_metadata.pop(CallSid, {})
+    patient_name = meta.get("patient_name", "there")
+    days_since_delivery = meta.get("days_since_delivery", "0")
+
     twiml = f"""<?xml version="1.0" encoding="UTF-8"?>
 <Response>
   <Connect>
     <Stream url="{ws_url}">
-      <Parameter name="direction" value="both"/>
+      <Parameter name="patient_name" value="{patient_name}"/>
+      <Parameter name="days_since_delivery" value="{days_since_delivery}"/>
     </Stream>
   </Connect>
 </Response>"""
-    logger.info(f"Returning TwiML with Media Stream URL: {ws_url}")
+    logger.info(f"Returning TwiML for callSid={CallSid} patient_name={patient_name!r} days={days_since_delivery}")
     return Response(content=twiml, media_type="application/xml")
 
 
@@ -104,41 +118,73 @@ async def media_stream_bridge(twilio_ws: WebSocket):
     # Shared state across the two concurrent tasks
     stream_sid: str | None = None
     call_sid: str | None = None
+    patient_name: str = "there"
+    days_since_delivery: str = "0"
     resample_state = None  # stateful resampler for audio continuity
 
     try:
-        # ── Resolve ElevenLabs agent & get a signed WebSocket URL ─────────────
+        # ── Connect directly to ElevenLabs WebSocket with API key header ─────
         agent_id = await get_or_create_agent()
-        signed_url = await get_signed_websocket_url(agent_id)
+        el_ws_url = get_elevenlabs_ws_url(agent_id)
+        el_ws_headers = get_elevenlabs_ws_headers()
         logger.info(f"Connecting to ElevenLabs agent {agent_id}")
 
-        async with websockets.connect(signed_url) as el_ws:
+        async with websockets.connect(el_ws_url, additional_headers=el_ws_headers) as el_ws:
             logger.info("ElevenLabs WebSocket connected")
 
+            # ── Read the Twilio 'start' event first so we know patient_name ───
+            # Twilio sends: connected → start → media...
+            # We drain messages until we get 'start', then send the ElevenLabs
+            # init so patient_name is available from the very first message.
+            twilio_buffer: list[dict] = []
+            while True:
+                raw = await twilio_ws.receive_text()
+                msg = json.loads(raw)
+                event = msg.get("event")
+                if event == "connected":
+                    continue  # skip the connected handshake
+                if event == "start":
+                    stream_sid = msg["start"]["streamSid"]
+                    call_sid = msg["start"]["callSid"]
+                    custom = msg["start"].get("customParameters", {})
+                    patient_name = custom.get("patient_name", "there")
+                    days_since_delivery = custom.get("days_since_delivery", "0")
+                    logger.info(
+                        f"Stream started: streamSid={stream_sid} "
+                        f"callSid={call_sid} patient_name={patient_name!r} days={days_since_delivery}"
+                    )
+                    break
+                twilio_buffer.append(msg)  # hold any early media frames
+
             # ── ElevenLabs init message ───────────────────────────────────────
-            # The agent prompt is already configured on the agent, but we can
-            # override first_message and other config per-call if needed.
+            # Supply dynamic_variables required by the agent's first_message
+            # template. The agent config controls the prompt and first_message;
+            # we only inject the runtime variables (e.g. patient_name).
             init_msg = {
                 "type": "conversation_initiation_client_data",
-                "custom_llm_extra_body": {},
+                "dynamic_variables": {
+                    "patient_name": patient_name,
+                    "days_since_delivery": days_since_delivery,
+                },
             }
             await el_ws.send(json.dumps(init_msg))
+            logger.info(f"Sent ElevenLabs init with patient_name={patient_name!r} days={days_since_delivery}")
+
+            # Flush any buffered media frames
+            for buffered in twilio_buffer:
+                if buffered.get("event") == "media":
+                    await el_ws.send(json.dumps({"user_audio_chunk": buffered["media"]["payload"]}))
 
             # ── Task 1: Twilio → ElevenLabs ───────────────────────────────────
             async def forward_twilio_to_elevenlabs():
-                nonlocal stream_sid, call_sid
+                nonlocal stream_sid, call_sid, patient_name, days_since_delivery
                 try:
                     while True:
                         raw = await twilio_ws.receive_text()
                         msg = json.loads(raw)
                         event = msg.get("event")
 
-                        if event == "start":
-                            stream_sid = msg["start"]["streamSid"]
-                            call_sid = msg["start"]["callSid"]
-                            logger.info(f"Stream started: streamSid={stream_sid} callSid={call_sid}")
-
-                        elif event == "media":
+                        if event == "media":
                             # Twilio sends mulaw 8kHz base64 — forward directly to ElevenLabs
                             # (agent is configured with ASR input format ulaw_8000)
                             audio_b64 = msg["media"]["payload"]
@@ -196,7 +242,7 @@ async def media_stream_bridge(twilio_ws: WebSocket):
                                 msg.get("agent_response_event", {}).get("agent_response", "")
                             )
                             if response_text:
-                                logger.info(f"[Amara]: {response_text}")
+                                logger.info(f"[Abena]: {response_text}")
 
                         elif msg_type == "user_transcript":
                             transcript = (
