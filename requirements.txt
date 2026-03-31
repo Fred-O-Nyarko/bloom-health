@@ -1,0 +1,11 @@
+fastapi>=0.111.0
+uvicorn[standard]>=0.29.0
+python-dotenv>=1.0.0
+twilio>=9.0.0
+httpx>=0.27.0
+websockets>=12.0
+pydantic-settings>=2.2.0
+
+# audioop-lts is a drop-in replacement for the deprecated audioop module (removed in Python 3.13)
+# Required for mulaw <-> PCM audio conversion (Twilio <-> ElevenLabs)
+audioop-lts>=0.2.1; python_version >= "3.13"
