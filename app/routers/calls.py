@@ -12,10 +12,41 @@ from app.config import settings
 router = APIRouter(prefix="/call", tags=["calls"])
 
 
+class MotherContext(BaseModel):
+    """Rich per-mother personalization sent by the upstream onboarding backend.
+
+    Used to render a per-call system prompt via ElevenLabs' conversation_config_override.
+    """
+
+    preferred_name: str
+    preferred_language: str = "english"
+    days_since_delivery: int = 0
+    delivery_type: str | None = None
+    delivery_outcome: str | None = None
+    parity: str | None = None
+    plurality: str | None = None
+    gestational_age_weeks: int | None = None
+    feeding_plan: str | None = None
+    feeding_challenges_noted: list[str] = []
+    mental_health_history: list[str] = []
+    chronic_conditions: list[str] = []
+    allergies: str | None = None
+    discharge_medications: list[dict] = []
+    primary_support_name: str | None = None
+    primary_support_relationship: str | None = None
+    baby_name: str | None = None
+    baby_sex: str | None = None
+    baby_birth_weight_grams: int | None = None
+    nicu_admission: bool = False
+    delivery_complications: list[str] = []
+
+
 class CallRequest(BaseModel):
     to: str  # E.164 format, e.g. "+14155552671"
-    patient_name: str = "there"  # Used in ElevenLabs first message dynamic variable
-    days_since_delivery: int = 0  # Days since the mother gave birth
+    patient_name: str = "there"  # Back-compat: used when mother_context is absent
+    days_since_delivery: int = 0  # Back-compat: used when mother_context is absent
+    hospital_name: str | None = None
+    mother_context: MotherContext | None = None
 
     @field_validator("to")
     @classmethod
@@ -42,6 +73,10 @@ async def outbound_call(body: CallRequest):
     which opens a Media Stream WebSocket to `/twiml/ws` where the
     ElevenLabs Conversational AI agent takes over the conversation.
 
+    If `mother_context` is provided, the WebSocket handler will override the
+    agent's system prompt for this conversation only, yielding a personalized
+    call. Without it, the default agent prompt is used.
+
     **Prerequisites:**
     - Twilio credentials configured in `.env`
     - ElevenLabs agent created (auto-created on first run)
@@ -49,10 +84,11 @@ async def outbound_call(body: CallRequest):
     """
     result = initiate_call(body.to)
 
-    # Store call variables so the TwiML webhook and WebSocket bridge can use them
     call_metadata[result["call_sid"]] = {
         "patient_name": body.patient_name,
         "days_since_delivery": str(body.days_since_delivery),
+        "hospital_name": body.hospital_name or "your clinic",
+        "mother_context": body.mother_context.model_dump() if body.mother_context else None,
     }
 
     return CallResponse(

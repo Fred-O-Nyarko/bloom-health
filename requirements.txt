@@ -9,3 +9,7 @@ pydantic-settings>=2.2.0
 # audioop-lts is a drop-in replacement for the deprecated audioop module (removed in Python 3.13)
 # Required for mulaw <-> PCM audio conversion (Twilio <-> ElevenLabs)
 audioop-lts>=0.2.1; python_version >= "3.13"
+
+# Optional — Area 2 post-call severity classifier uses Anthropic when
+# ANTHROPIC_API_KEY is set; falls back to rule-based scan otherwise.
+anthropic>=0.40.0

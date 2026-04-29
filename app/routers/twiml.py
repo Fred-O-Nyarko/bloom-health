@@ -31,6 +31,9 @@ from app.services.elevenlabs_service import (
     get_elevenlabs_ws_url,
     get_elevenlabs_ws_headers,
 )
+from app.services.post_call import send_post_call
+from app.services.severity import classify as classify_severity
+from app.prompts.postpartum import render_first_message, render_system_prompt
 
 logger = logging.getLogger(__name__)
 
@@ -104,8 +107,9 @@ async def twiml_answer(
     """
     ws_url = settings.twiml_websocket_url
 
-    # Look up the call variables stored when the call was initiated (outbound only)
-    meta = call_metadata.pop(CallSid, {})
+    # Peek at the small scalar fields for logging + TwiML parameters.
+    # Do NOT pop — the WebSocket handler pops this entry once it has the full context.
+    meta = call_metadata.get(CallSid, {})
     patient_name = meta.get("patient_name", "there")
     days_since_delivery = meta.get("days_since_delivery", "0")
 
@@ -150,6 +154,11 @@ async def media_stream_bridge(twilio_ws: WebSocket):
     resample_state = None     # ElevenLabs PCM 16kHz → Twilio mulaw 8kHz
     upsample_state = None     # Twilio mulaw 8kHz → ElevenLabs PCM 16kHz
 
+    # Transcript & context captured during the conversation, used by the
+    # post-call severity classifier (Area 2).
+    transcript_lines: list[str] = []
+    mother_context_for_classifier: dict | None = None
+
     try:
         # ── Connect directly to ElevenLabs WebSocket with API key header ─────
         agent_id = await get_or_create_agent()
@@ -175,28 +184,62 @@ async def media_stream_bridge(twilio_ws: WebSocket):
                     stream_sid = msg["start"]["streamSid"]
                     call_sid = msg["start"]["callSid"]
                     custom = msg["start"].get("customParameters", {})
-                    patient_name = custom.get("patient_name", "there")
-                    days_since_delivery = custom.get("days_since_delivery", "0")
+
+                    # Retrieve the full onboarding-derived context stashed by /call/outbound.
+                    # Pop here (not in /twiml/answer) so the WebSocket owns cleanup.
+                    meta = call_metadata.pop(call_sid or "", {})
+                    mother_context = meta.get("mother_context")
+                    mother_context_for_classifier = mother_context
+                    hospital_name = meta.get("hospital_name", "your clinic")
+
+                    # Fallback scalars — used when mother_context is absent (inbound calls,
+                    # or callers using the old simple payload).
+                    patient_name = (
+                        (mother_context or {}).get("preferred_name")
+                        or custom.get("patient_name", "there")
+                    )
+                    days_since_delivery = str(
+                        (mother_context or {}).get("days_since_delivery")
+                        or custom.get("days_since_delivery", "0")
+                    )
                     logger.info(
                         f"Stream started: streamSid={stream_sid} "
-                        f"callSid={call_sid} patient_name={patient_name!r} days={days_since_delivery}"
+                        f"callSid={call_sid} patient_name={patient_name!r} days={days_since_delivery} "
+                        f"has_mother_context={mother_context is not None}"
                     )
                     break
                 twilio_buffer.append(msg)  # hold any early media frames
 
             # ── ElevenLabs init message ───────────────────────────────────────
-            # Supply dynamic_variables required by the agent's first_message
-            # template. The agent config controls the prompt and first_message;
-            # we only inject the runtime variables (e.g. patient_name).
-            init_msg = {
+            # Always send dynamic_variables for basic personalization. If we have
+            # a rich mother_context, additionally override the agent's system
+            # prompt and first_message for this conversation only.
+            init_msg: dict = {
                 "type": "conversation_initiation_client_data",
                 "dynamic_variables": {
                     "patient_name": patient_name,
                     "days_since_delivery": days_since_delivery,
+                    "hospital_name": hospital_name,
                 },
             }
+            if mother_context:
+                rendered_prompt = render_system_prompt(mother_context, hospital_name)
+                rendered_first_message = render_first_message(mother_context, hospital_name)
+                init_msg["conversation_config_override"] = {
+                    "agent": {
+                        "prompt": {"prompt": rendered_prompt},
+                        "first_message": rendered_first_message,
+                    }
+                }
+                logger.info(
+                    f"Applying conversation_config_override for {patient_name!r} "
+                    f"(outcome={mother_context.get('delivery_outcome')!r}, "
+                    f"delivery_type={mother_context.get('delivery_type')!r})"
+                )
             await el_ws.send(json.dumps(init_msg))
-            logger.info(f"Sent ElevenLabs init with patient_name={patient_name!r} days={days_since_delivery}")
+            logger.info(
+                f"Sent ElevenLabs init with patient_name={patient_name!r} days={days_since_delivery}"
+            )
 
             # Flush any early audio frames buffered before the start event
             for buffered in twilio_buffer:
@@ -272,13 +315,15 @@ async def media_stream_bridge(twilio_ws: WebSocket):
                             )
                             if response_text:
                                 logger.info(f"[Bloom]: {response_text}")
+                                transcript_lines.append(f"Bloom: {response_text}")
 
                         elif msg_type == "user_transcript":
-                            transcript = (
+                            user_text = (
                                 msg.get("user_transcription_event", {}).get("user_transcript", "")
                             )
-                            if transcript:
-                                logger.info(f"[User]: {transcript}")
+                            if user_text:
+                                logger.info(f"[User]: {user_text}")
+                                transcript_lines.append(f"Mother: {user_text}")
 
                         elif msg_type == "conversation_initiation_metadata":
                             conv_id = (
@@ -303,3 +348,19 @@ async def media_stream_bridge(twilio_ws: WebSocket):
         logger.error(f"WebSocket bridge error: {e}", exc_info=True)
     finally:
         logger.info(f"Call ended (callSid={call_sid})")
+        # Area 2: classify severity + post the verdict to the Bloom portal.
+        # Best-effort — never raise from cleanup.
+        try:
+            transcript = "\n".join(transcript_lines)
+            if call_sid and transcript.strip():
+                verdict = await classify_severity(
+                    transcript, mother_context_for_classifier
+                )
+                await send_post_call(call_sid, transcript, verdict)
+            elif call_sid:
+                logger.info(
+                    f"Skipping post-call classification — no transcript captured "
+                    f"(callSid={call_sid})"
+                )
+        except Exception as e:
+            logger.warning(f"Post-call classification dispatch failed: {e}")

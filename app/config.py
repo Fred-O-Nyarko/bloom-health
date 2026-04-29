@@ -2,7 +2,7 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
 class Settings(BaseSettings):
-    model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8")
+    model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8", extra="ignore")
 
     # Twilio
     twilio_account_sid: str
@@ -16,6 +16,14 @@ class Settings(BaseSettings):
 
     # Server
     public_base_url: str = "http://localhost:8000"
+
+    # Bloom portal — post-call ingestion target (Area 2)
+    portal_base_url: str = "http://localhost:8001"
+
+    # Anthropic — used for post-call severity classification.
+    # Optional: if absent, severity falls back to rule-based detection.
+    anthropic_api_key: str = ""
+    anthropic_model: str = "claude-sonnet-4-6"
 
     @property
     def twiml_answer_url(self) -> str:
